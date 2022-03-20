@@ -23,7 +23,7 @@ int main()
 
     for (int i = 0; i <= offset; i++) {
         sz = write(fd, write_buf, strlen(write_buf));
-        printf("Writing to " FIB_DEV ", returned the sequence %lld\n", sz);
+        printf("Writing to " FIB_DEV ", returned the time %lld (ns)\n", sz);
     }
 
     for (int i = 0; i <= offset; i++) {
