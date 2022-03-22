@@ -24,19 +24,63 @@ static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
+__attribute__((always_inline)) static inline void escape(void *p)
+{
+    __asm__ volatile("" : : "g"(p) : "memory");
+}
+
 static long long fib_sequence(long long k)
 {
-    /* FIXME: C99 variable-length array (VLA) is not allowed in Linux kernel. */
-    long long f[k + 2];
+    if (k <= 2)
+        return !!k;
+
+    long long f[3];  // replace variable-length array (VLA)
 
     f[0] = 0;
     f[1] = 1;
 
     for (int i = 2; i <= k; i++) {
-        f[i] = f[i - 1] + f[i - 2];
+        f[2] = f[0] + f[1];
+        f[0] = f[1];
+        f[1] = f[2];
     }
 
-    return f[k];
+    return f[2];
+}
+
+/* calculate the fibonacci number using fast doubling */
+static long long fib_seq_fd_clz(long long k)
+{
+    /*
+     * F(2), F(1) = 1, F(0) = 0
+     * avoid 0 to __builtin_clz
+     */
+    if (k <= 2)
+        return !!k;
+
+    long long f[2];
+
+    f[0] = 0;  // F(n)
+    f[1] = 1;  // F(n+1)
+
+    /* get MSB for the total round of the loop */
+    for (int i = __builtin_clzll(k) - 1; i >= 0; --i) {
+        /* F(2n) = F(n) * [ 2 * F(n+1) - F(n) ] */
+        long long f1 = f[0] * ((f[1] << 1) - f[0]);
+        /* F(2n+1) = F(n)^2 + F(n+1)^2 */
+        long long f2 = f[0] * f[0] + f[1] * f[1];
+
+        /* k >> i is odd or not */
+        if ((k >> i) & 1) {
+            f[0] = f2;       // F(2n+1)
+            f[1] = f1 + f2;  // F(2n+2)
+        } else {
+            f[0] = f1;  // F(2n)
+            f[1] = f2;  // F(2n+1)
+        }
+    }
+
+    return f[0];  // F(k)
 }
 
 static int fib_open(struct inode *inode, struct file *file)
@@ -63,15 +107,30 @@ static ssize_t fib_read(struct file *file,
     return (ssize_t) fib_sequence(*offset);
 }
 
-/* write operation is skipped */
 static ssize_t fib_write(struct file *file,
                          const char *buf,
                          size_t size,
                          loff_t *offset)
 {
-    ktime_t kt = ktime_get();
-    fib_sequence(*offset);
-    kt = ktime_sub(ktime_get(), kt);
+    ktime_t kt;
+    long long result = 0;
+    switch (size) {
+    case 0:
+        kt = ktime_get();
+        fib_sequence(*offset);
+        kt = ktime_sub(ktime_get(), kt);
+        break;
+    case 1:
+        kt = ktime_get();
+        result = fib_seq_fd_clz(*offset);
+        kt = ktime_sub(ktime_get(), kt);
+        escape(&result);
+        break;
+    case 2:
+        return ktime_to_ns(ktime_get());
+    default:
+        return 1;
+    }
     return (ssize_t) ktime_to_ns(kt);
 }
 
